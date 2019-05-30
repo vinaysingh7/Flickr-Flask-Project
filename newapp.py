@@ -5,6 +5,8 @@ import numpy as np
 import heapq
 import multiprocessing as mp
 import sys
+from pymongo import MongoClient
+
 
 import tensorflow as tf
 
@@ -18,7 +20,6 @@ import pprint
 import pandas as pd
 import pickle
 import time
-import subprocess
 import flask
 from flask import Flask, request, jsonify, make_response
 from flask_restplus import Api, Resource, fields
@@ -47,6 +48,7 @@ model = None
 model_extractfeatures = None
 graph = None
 fin_centroids = None
+collection = None
 result_list = []
 path = os.getcwd()
 images_path = Path(path).parent
@@ -59,10 +61,8 @@ class Results(Resource):
     f.close()
     return centroids
 
-
   def to_float_arr(arr):
     return np.array(list(map(float, arr)))
-
 
   def centroid_to_dict(centroids):
     d = {}
@@ -77,7 +77,6 @@ class Results(Resource):
 
   def calculate_dist(a, b):
     return np.linalg.norm(a-b)
-
 
   def calculate_closest(fin_centroids, pt, split):
     minimum = ""
@@ -123,8 +122,6 @@ class Results(Resource):
         i = i+1
     return res
 
-  
-
   def log_result(result):
       # This is called whenever foo_pool(i) returns a result.
       # result_list is modified only by the main process, not the pool workers.
@@ -143,7 +140,6 @@ class Results(Resource):
       pool.join()
       return result_list
 
-
   def find_min_local(K, data):
     res = []
     for sub_data in data:
@@ -151,16 +147,19 @@ class Results(Resource):
         res.append(k)
     return sorted(res, reverse=True)[0:K]
 
-
   def init():
       global model
       global model_extractfeatures
       global graph
+      global collection
       model = vgg16.VGG16(weights='imagenet', include_top=True)
       model_extractfeatures = Model(model.input, outputs=model.get_layer('fc2').output)
       graph = tf.get_default_graph()
       global fin_centroids
       fin_centroids = Results.centroid_to_dict(Results.read_centroids("data/centroids.pkl"))
+      client = MongoClient()
+      db = client.flickrurls
+      collection = db["final_data"]
 
   def options(self):
     response = make_response()
@@ -181,9 +180,6 @@ class Results(Resource):
       
       images_path = Path.cwd().parent / 'reactUI/flickr-react/src/images'
 
-      # for root, dirs, files in os.walk(images_path):
-      #   for file in files:
-      #     os.remove(os.path.join(root, file))
       address = str(images_path) + '/' + image_name
       urllib.request.urlretrieve(url,address)
       
@@ -206,8 +202,6 @@ class Results(Resource):
       md5s = Results.apply_async_with_callback((np.asarray(comp), dist), images_count)
       print(time.ctime())
 
-
-
       yolo = Results.find_min_local(images_count, md5s)
 
       finals =[]
@@ -215,10 +209,7 @@ class Results(Resource):
       print(time.ctime())
       
       for md5 in yolo:
-        cmd = "LC_ALL=C fgrep -m 1 '"+ str(md5[1]) +"' /media/vinay/New_Ubuntu/MSCS-Assignments/CS6240_MapReduce/project/flaskUI/flaskUI/data/final_data | cut -d ',' -f2"
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
-        temp = process.communicate()[0]
-        finals.append(str(temp.decode("utf-8")).strip())
+        finals.append(collection.find_one({ "md5": str(md5[1]) })['url'])
       example=finals
 
       print(example)
@@ -228,10 +219,6 @@ class Results(Resource):
       }, 200
     except Exception as error:
       return {"status", "Could not find similar images"}, 500
-  
-  # @app.after_request
-  # def after_request(response):
-  #   response.headers.add('Access-Control-Allow-Origin', '*')
 
 if __name__ == "__main__":
   Results.init()
